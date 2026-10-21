@@ -1,0 +1,27 @@
+{
+	"schemaVersion": 1,
+	"id": "mcutils",
+	"version": "${version}",
+	"name": "MC Utils",
+	"description": "WorldEdit add-on: //texture (Perlin-noise block texturing), //paste-equaly (paste on chosen original axes) and //paste-on-ground.",
+	"authors": [
+		"trail-b1az3r"
+	],
+	"contact": {
+		"sources": "https://github.com/trail-b1az3r/mcutils"
+	},
+	"license": "MIT",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"dev.mcutils.McUtils"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~${minecraft_version}",
+		"java": ">=25",
+		"fabric-api": "*",
+		"worldedit": ">=${worldedit_version}"
+	}
+}

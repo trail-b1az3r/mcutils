@@ -1,0 +1,139 @@
+# Build, test, tag and release - all in one workflow.
+#
+#   push / pull request   -> build + test every supported Minecraft version
+#   push to main          -> ... then tag v<mod_version> and publish a GitHub release
+#                            (skipped when that tag already exists, so bump mod_version in
+#                            gradle.properties to cut a new release)
+#   push of a v* tag      -> ... then publish a release for that tag (must match mod_version)
+#   manual run            -> build + test; tick "release" to also tag and publish
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Tag and publish a release (needs a mod_version without an existing tag)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' && github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    name: Build (Minecraft ${{ matrix.mc }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mc: ['26.2', '26.3']
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Build and unit-test
+        run: ./gradlew build -Pmc_target=${{ matrix.mc }} --stacktrace
+
+      # Boots a real dedicated server with Fabric API + WorldEdit + this mod and runs every command
+      # through a fake op player, checking the resulting blocks. Not part of the released jar.
+      - name: In-game self test
+        run: |
+          mkdir -p run-selftest
+          echo 'eula=true' > run-selftest/eula.txt
+          printf 'online-mode=false\nlevel-type=minecraft\\:flat\nview-distance=4\nsimulation-distance=4\n' > run-selftest/server.properties
+          timeout 600 ./gradlew runSelftest -Pmc_target=${{ matrix.mc }} --stacktrace 2>&1 | tee selftest.log
+          grep -q 'SELFTEST PASS' selftest.log
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mcutils-mc${{ matrix.mc }}
+          path: |
+            build/libs/*.jar
+            !build/libs/*-sources.jar
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: logs-mc${{ matrix.mc }}
+          path: |
+            selftest.log
+            run-selftest/logs/
+            build/reports/
+            build/test-results/
+          if-no-files-found: ignore
+
+  release:
+    name: Tag & release
+    needs: build
+    if: >-
+      github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')
+      || github.event_name == 'workflow_dispatch' && inputs.release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work out the release tag
+        id: meta
+        run: |
+          version=$(sed -n 's/^mod_version=//p' gradle.properties | tr -d '\r')
+          [ -n "$version" ] || { echo "mod_version not found in gradle.properties"; exit 1; }
+          tag="v$version"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "$tag" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match mod_version in gradle.properties (expected $tag)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check for an existing release
+        id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::Release $TAG already exists - nothing to do. Bump mod_version in gradle.properties for a new release."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/download-artifact@v8
+        if: steps.exists.outputs.exists == 'false'
+        with:
+          pattern: mcutils-mc*
+          path: dist
+          merge-multiple: true
+
+      - name: Create tag and release
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          ls -l dist
+          # --target makes gh create the tag on this commit when it doesn't exist yet (branch builds);
+          # for a pushed tag it simply uses the existing one.
+          gh release create "$TAG" dist/*.jar \
+            --target "$GITHUB_SHA" \
+            --title "MC Utils $VERSION" \
+            --generate-notes \
+            --notes "One jar per Minecraft version - pick the one matching your game. Requires [WorldEdit](https://modrinth.com/mod/worldedit) and [Fabric API](https://modrinth.com/mod/fabric-api), Fabric Loader 0.19.5+ and Java 25."
