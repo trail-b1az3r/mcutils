@@ -14,7 +14,7 @@ import java.util.Set;
 import java.util.UUID;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.entity.FakePlayer;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
@@ -29,19 +29,30 @@ import net.minecraft.world.level.block.Blocks;
  * Only active with -Dmcutils.selftest=true (set by the gradle "runSelftest" task).
  */
 public class SelfTest implements ModInitializer {
+	private static final int WARMUP_TICKS = 60;
+
 	private MinecraftServer server;
 	private ServerLevel level;
 	private ServerPlayer fake;
 	private Player wePlayer;
 	private LocalSession session;
 	private int checks;
+	private int ticks;
+	private boolean finished;
 
 	@Override
 	public void onInitialize() {
 		if (!Boolean.getBoolean("mcutils.selftest")) {
 			return;
 		}
-		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+		// Don't start straight from SERVER_STARTED: other mods (WorldEdit fills its block registry there)
+		// may not have run their own listeners yet, which made the first command flaky in CI.
+		// Real players can't type a command at that moment, so wait a couple of seconds of ticks.
+		ServerTickEvents.END_SERVER_TICK.register(server -> {
+			if (finished || ++ticks < WARMUP_TICKS) {
+				return;
+			}
+			finished = true;
 			try {
 				this.server = server;
 				run();
