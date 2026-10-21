@@ -1,0 +1,15 @@
+{
+	"schemaVersion": 1,
+	"id": "mcutils-selftest",
+	"version": "0",
+	"name": "MC Utils self test",
+	"environment": "server",
+	"entrypoints": {
+		"main": [
+			"dev.mcutils.selftest.SelfTest"
+		]
+	},
+	"depends": {
+		"mcutils": "*"
+	}
+}

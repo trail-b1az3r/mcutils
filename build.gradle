@@ -1,0 +1,117 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+	id 'maven-publish'
+}
+
+// One source tree, one jar per supported Minecraft version.
+def targetProps = new Properties()
+file("versions/${project.mc_target}.properties").withInputStream { targetProps.load(it) }
+def minecraftVersion = targetProps.getProperty('minecraft_version')
+def fabricApiVersion = targetProps.getProperty('fabric_api_version')
+def worldEditVersion = targetProps.getProperty('worldedit_version')
+
+version = "${project.mod_version}+mc${minecraftVersion}"
+group = project.maven_group
+
+base {
+	archivesName = project.archives_base_name
+}
+
+repositories {
+	maven {
+		name = 'EngineHub'
+		url = 'https://maven.enginehub.org/repo/'
+	}
+}
+
+// Dev-only in-game self test (never packaged into the mod jar). Runs when the dev server is
+// started with -Dmcutils.selftest=true; see the "selftest" run below.
+sourceSets {
+	selftest {
+		compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output
+		runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.main.output
+	}
+}
+
+loom {
+	mods {
+		"mcutils" {
+			sourceSet sourceSets.main
+		}
+		"mcutils-selftest" {
+			sourceSet sourceSets.selftest
+		}
+	}
+	runs {
+		selftest {
+			server()
+			name = 'MC Utils self test'
+			source sourceSets.selftest
+			runDir 'run-selftest'
+			property 'mcutils.selftest', 'true'
+			programArgs '--nogui'
+		}
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${minecraftVersion}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${fabricApiVersion}"
+
+	// WorldEdit supplies selections, the clipboard, undo history and block parsing.
+	// Only the mod jar itself is wanted here; Fabric API / loader come from above.
+	implementation("com.sk89q.worldedit:worldedit-fabric-mc${minecraftVersion}:${worldEditVersion}") {
+		transitive = false
+	}
+	implementation "com.sk89q.worldedit:worldedit-core:${worldEditVersion}"
+	implementation "com.sk89q.worldedit:worldedit-core-mc-mc${minecraftVersion}:${worldEditVersion}"
+
+	testImplementation platform('org.junit:junit-bom:5.11.4')
+	testImplementation 'org.junit.jupiter:junit-jupiter'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+processResources {
+	def props = [
+		version          : project.version,
+		minecraft_version: minecraftVersion,
+		worldedit_version: worldEditVersion,
+	]
+	inputs.properties props
+	filesMatching('fabric.mod.json') {
+		expand props
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+	it.options.encoding = 'UTF-8'
+	it.options.compilerArgs << '-Xlint:deprecation'
+}
+
+test {
+	useJUnitPlatform()
+}
+
+java {
+	withSourcesJar()
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}
+
+jar {
+	def projectName = project.name
+	inputs.property 'projectName', projectName
+	from('LICENSE') {
+		rename { "${it}_${projectName}" }
+	}
+}
+
+publishing {
+	publications {
+		create('mavenJava', MavenPublication) {
+			from components.java
+		}
+	}
+}
